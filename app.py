@@ -356,16 +356,17 @@ else:
     c5.metric("Storm Deaths",  len(match_df[match_df["event"] == "KilledByStorm"]))
     c6.metric("Loot Events",   len(match_df[match_df["event"] == "Loot"]))
 
-    # Timeline
-    st.markdown("### Timeline Playback")
-    st.caption("Showing full match by default — hit Reset then Play to watch it unfold!")
+   # Timeline — moved to sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⏱️ Timeline Playback")
+    st.sidebar.caption("Showing full match by default — Reset then Play to watch it unfold!")
 
-    btn1, btn2, btn3, _ = st.columns([1,1,1,6])
-    if btn1.button("Play"):
+    sb1, sb2, sb3 = st.sidebar.columns(3)
+    if sb1.button("▶"):
         st.session_state.playing = True
-    if btn2.button("Pause"):
+    if sb2.button("⏸"):
         st.session_state.playing = False
-    if btn3.button("Reset"):
+    if sb3.button("⏮"):
         st.session_state.playing = False
         st.session_state.cursor  = 0
 
@@ -373,23 +374,12 @@ else:
         st.session_state.playing = False
         st.session_state.cursor  = st.session_state.manual_slider
 
-    st.slider("Match Time", min_value=0, max_value=max(match_duration,1),
+    st.sidebar.slider("Match Time", min_value=0, max_value=max(match_duration,1),
               value=st.session_state.cursor, key="manual_slider",
               on_change=on_slider_change)
 
     ts_cursor = st.session_state.cursor
-    st.caption(f"{format_time(ts_cursor)} / {format_time(match_duration)}")
-
-    visible_df = match_df[match_df["ts_ms"] <= ts_cursor].copy()
-    visible_df = add_px_py(visible_df, selected_map)
-
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Events Shown", len(visible_df))
-    c2.metric("Kills So Far", len(visible_df[visible_df["event"].isin(["Kill","BotKill"])]))
-    c3.metric("Storm Deaths", len(visible_df[visible_df["event"] == "KilledByStorm"]))
-    c4.metric("Loot So Far",  len(visible_df[visible_df["event"] == "Loot"]))
-
-    fig = make_base_fig(selected_map)
+    st.sidebar.caption(f"⏱ {format_time(ts_cursor)} / {format_time(match_duration)}")
 
     # Heatmap
     if show_heatmap:
