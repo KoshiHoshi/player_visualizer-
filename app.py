@@ -60,6 +60,13 @@ def pil_to_base64(img):
     img.save(buf, format="PNG")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
+def add_px_py(df, map_id):
+    df = df.copy()
+    coords = df.apply(lambda r: pd.Series(world_to_minimap(r["x"], r["z"], map_id)), axis=1)
+    df["px"] = coords[0]
+    df["py"] = coords[1]
+    return df
+
 def make_dead_zone_overlay(position_df, grid=32):
     if position_df.empty:
         return None
@@ -86,9 +93,18 @@ def make_dead_zone_overlay(position_df, grid=32):
         showlegend=True,
     )
 
-# ─────────────────────────────────────────────
-# LOAD JSON DATA
-# ─────────────────────────────────────────────
+def make_base_fig(selected_map):
+    map_img = Image.open(MINIMAP_PATHS[selected_map])
+    map_b64 = pil_to_base64(map_img)
+    fig = go.Figure()
+    fig.add_layout_image(dict(
+        source=map_b64, x=0, y=1024,
+        sizex=1024, sizey=1024,
+        xref="x", yref="y",
+        layer="below", sizing="stretch",
+    ))
+    return fig
+
 @st.cache_data
 def load_json_data():
     with open(os.path.join(OUTPUT_DIR, "events.json")) as f:
@@ -97,15 +113,11 @@ def load_json_data():
         heatmap = json.load(f)
     with open(os.path.join(OUTPUT_DIR, "matches.json")) as f:
         matches = json.load(f)
-
     events_df  = pd.DataFrame(events)
     heatmap_df = pd.DataFrame(heatmap)
     matches_df = pd.DataFrame(matches)
     return events_df, heatmap_df, matches_df
 
-# ─────────────────────────────────────────────
-# LOAD MATCH DETAIL (from parquet if local, else from events_df)
-# ─────────────────────────────────────────────
 @st.cache_data
 def get_match_detail(match_id, events_df):
     match_df = events_df[events_df["match_id"] == match_id].copy()
@@ -141,7 +153,7 @@ with st.spinner("Loading data..."):
     events_df, heatmap_df, matches_df = load_json_data()
 
 # ─────────────────────────────────────────────
-# SIDEBAR
+# SIDEBAR — top level filters
 # ─────────────────────────────────────────────
 st.sidebar.markdown("## Filters")
 
@@ -151,15 +163,12 @@ selected_map   = st.sidebar.selectbox("Select Map", available_maps)
 st.sidebar.markdown("---")
 view_mode = st.sidebar.radio("Analysis Mode", ["Single Match", "Aggregate (All Matches)"])
 
-# Filter by map
-map_events   = events_df[events_df["map"] == selected_map].copy()
-map_heatmap  = heatmap_df[heatmap_df["map"] == selected_map].copy()
-map_matches  = matches_df[matches_df["map"] == selected_map].copy()
+map_events  = events_df[events_df["map"] == selected_map].copy()
+map_heatmap = heatmap_df[heatmap_df["map"] == selected_map].copy()
+map_matches = matches_df[matches_df["map"] == selected_map].copy()
 
-# Date filter
 selected_days = st.sidebar.multiselect(
-    "Filter by Date", options=DAY_FOLDERS,
-    default=DAY_FOLDERS,
+    "Filter by Date", options=DAY_FOLDERS, default=DAY_FOLDERS,
     format_func=lambda x: x.replace("_", " ")
 )
 if selected_days:
@@ -167,32 +176,16 @@ if selected_days:
     map_heatmap = map_heatmap[map_heatmap["date"].isin(selected_days)]
     map_matches = map_matches[map_matches["date"].isin(selected_days)]
 
-# Coordinate conversion helper
-def add_px_py(df, map_id):
-    df = df.copy()
-    coords = df.apply(lambda r: pd.Series(world_to_minimap(r["x"], r["z"], map_id)), axis=1)
-    df["px"] = coords[0]
-    df["py"] = coords[1]
-    return df
-
-def make_base_fig(selected_map):
-    map_img = Image.open(MINIMAP_PATHS[selected_map])
-    map_b64 = pil_to_base64(map_img)
-    fig = go.Figure()
-    fig.add_layout_image(dict(
-        source=map_b64, x=0, y=1024,
-        sizex=1024, sizey=1024,
-        xref="x", yref="y",
-        layer="below", sizing="stretch",
-    ))
-    return fig
-
 # ─────────────────────────────────────────────
 # AGGREGATE MODE
 # ─────────────────────────────────────────────
 if view_mode == "Aggregate (All Matches)":
+
     st.markdown("## Aggregate Analysis — " + selected_map)
-    st.caption(f"{map_matches['match_id'].nunique()} matches · {map_events[map_events['human']==True]['user_id'].nunique()} unique players")
+    st.caption(
+        f"{map_matches['match_id'].nunique()} matches · "
+        f"{map_events[map_events['human']==True]['user_id'].nunique()} unique players"
+    )
 
     map_events_px  = add_px_py(map_events, selected_map)
     map_heatmap_px = add_px_py(map_heatmap, selected_map)
@@ -207,7 +200,6 @@ if view_mode == "Aggregate (All Matches)":
     agg_show_deadzones = st.sidebar.checkbox("Dead Zones",          value=False)
     agg_show_markers   = st.sidebar.checkbox("Individual Markers",  value=False)
 
-    # Stats
     c1,c2,c3,c4,c5,c6 = st.columns(6)
     c1.metric("Matches",        map_matches["match_id"].nunique())
     c2.metric("Unique Players", map_events[map_events["human"]==True]["user_id"].nunique())
@@ -216,7 +208,6 @@ if view_mode == "Aggregate (All Matches)":
     c5.metric("Storm Deaths",   len(map_events[map_events["event"] == "KilledByStorm"]))
     c6.metric("Loot Events",    len(map_events[map_events["event"] == "Loot"]))
 
-    # Auto insights
     with st.expander("Auto Insights", expanded=True):
         ic1, ic2, ic3 = st.columns(3)
 
@@ -333,6 +324,7 @@ else:
 
     st.session_state.cursor = min(st.session_state.cursor, match_duration)
 
+    # ── SIDEBAR LAYERS ────────────────────────
     st.sidebar.markdown("---")
     st.sidebar.subheader("Layers")
     show_human_paths = st.sidebar.checkbox("Human Movement Paths", value=True)
@@ -342,31 +334,22 @@ else:
     show_storm       = st.sidebar.checkbox("Storm Death Markers",  value=True)
     show_heatmap     = st.sidebar.checkbox("Heatmap Overlay",      value=False)
     show_deadzones   = st.sidebar.checkbox("Dead Zones",           value=False)
-    heatmap_type     = st.sidebar.radio("Heatmap Type", ["Kills Only","Deaths Only","Storm Deaths","Loot"])
-    path_opacity     = st.sidebar.slider("Path Opacity", 0.1, 1.0, 0.6, 0.05)
+    heatmap_type     = st.sidebar.radio(
+        "Heatmap Type", ["Kills Only","Deaths Only","Storm Deaths","Loot"]
+    )
+    path_opacity = st.sidebar.slider("Path Opacity", 0.1, 1.0, 0.6, 0.05)
 
-    # Match overview
-    st.markdown("## Match Overview")
-    match_info = map_matches[map_matches["match_id"] == selected_match].iloc[0]
-    c1,c2,c3,c4,c5,c6 = st.columns(6)
-    c1.metric("Human Players", int(match_info["players"]))
-    c2.metric("Bots",          int(match_info["bots"]))
-    c3.metric("Duration",      format_time(match_duration))
-    c4.metric("Total Kills",   len(match_df[match_df["event"].isin(["Kill","BotKill"])]))
-    c5.metric("Storm Deaths",  len(match_df[match_df["event"] == "KilledByStorm"]))
-    c6.metric("Loot Events",   len(match_df[match_df["event"] == "Loot"]))
-
-   # Timeline — moved to sidebar
+    # ── SIDEBAR TIMELINE ──────────────────────
     st.sidebar.markdown("---")
     st.sidebar.subheader("⏱️ Timeline Playback")
-    st.sidebar.caption("Showing full match by default — Reset then Play to watch it unfold!")
+    st.sidebar.caption("Showing full match by default — Reset then Play to watch!")
 
     sb1, sb2, sb3 = st.sidebar.columns(3)
-    if sb1.button("▶"):
+    if sb1.button("▶ Play"):
         st.session_state.playing = True
-    if sb2.button("⏸"):
+    if sb2.button("⏸ Pause"):
         st.session_state.playing = False
-    if sb3.button("⏮"):
+    if sb3.button("⏮ Reset"):
         st.session_state.playing = False
         st.session_state.cursor  = 0
 
@@ -374,14 +357,50 @@ else:
         st.session_state.playing = False
         st.session_state.cursor  = st.session_state.manual_slider
 
-    st.sidebar.slider("Match Time", min_value=0, max_value=max(match_duration,1),
-              value=st.session_state.cursor, key="manual_slider",
-              on_change=on_slider_change)
+    st.sidebar.slider(
+        "Match Time",
+        min_value=0,
+        max_value=max(match_duration, 1),
+        value=st.session_state.cursor,
+        key="manual_slider",
+        on_change=on_slider_change,
+    )
 
     ts_cursor = st.session_state.cursor
     st.sidebar.caption(f"⏱ {format_time(ts_cursor)} / {format_time(match_duration)}")
 
-    # Heatmap
+    # ── MAIN AREA ─────────────────────────────
+    st.markdown("## Match Overview")
+    match_info = map_matches[map_matches["match_id"] == selected_match]
+    if not match_info.empty:
+        match_info = match_info.iloc[0]
+        num_humans = int(match_info["players"])
+        num_bots   = int(match_info["bots"])
+    else:
+        num_humans = match_df[match_df["human"]==True]["user_id"].nunique()
+        num_bots   = match_df[match_df["human"]==False]["user_id"].nunique()
+
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1.metric("Human Players", num_humans)
+    c2.metric("Bots",          num_bots)
+    c3.metric("Duration",      format_time(match_duration))
+    c4.metric("Total Kills",   len(match_df[match_df["event"].isin(["Kill","BotKill"])]))
+    c5.metric("Storm Deaths",  len(match_df[match_df["event"] == "KilledByStorm"]))
+    c6.metric("Loot Events",   len(match_df[match_df["event"] == "Loot"]))
+
+    # Live stats
+    visible_df = match_df[match_df["ts_ms"] <= ts_cursor].copy()
+    visible_df = add_px_py(visible_df, selected_map)
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Events Shown", len(visible_df))
+    c2.metric("Kills So Far", len(visible_df[visible_df["event"].isin(["Kill","BotKill"])]))
+    c3.metric("Storm Deaths", len(visible_df[visible_df["event"] == "KilledByStorm"]))
+    c4.metric("Loot So Far",  len(visible_df[visible_df["event"] == "Loot"]))
+
+    # ── FIGURE ────────────────────────────────
+    fig = make_base_fig(selected_map)
+
     if show_heatmap:
         hmap_events = {
             "Kills Only":   ["Kill","BotKill"],
@@ -405,7 +424,6 @@ else:
                 ncontours=20, hoverinfo="skip",
             ))
 
-    # Dead zones — use heatmap positions for this match
     if show_deadzones:
         match_heat = map_heatmap[map_heatmap["match"] == selected_match].copy()
         if not match_heat.empty:
@@ -413,20 +431,18 @@ else:
             dz = make_dead_zone_overlay(match_heat[match_heat["human"]==True])
             if dz: fig.add_trace(dz)
 
-    # Human paths — note: events_df only has marker events, not position
-    # So for paths we just connect the marker events in time order per player
     human_players = match_df[match_df["human"]==True]["user_id"].unique()
     bot_players   = match_df[match_df["human"]==False]["user_id"].unique()
 
     if show_human_paths:
-        for i, player_id in enumerate(human_players):
-            player_df = visible_df[visible_df["user_id"] == player_id].sort_values("ts_ms")
+        for i, pid in enumerate(human_players):
+            player_df = visible_df[visible_df["user_id"] == pid].sort_values("ts_ms")
             if player_df.empty: continue
             color = HUMAN_COLORS[i % len(HUMAN_COLORS)]
             fig.add_trace(go.Scatter(
                 x=player_df["px"], y=player_df["py"],
                 mode="lines+markers",
-                name=f"Human {player_id[:8]}",
+                name=f"Human {pid[:8]}",
                 line=dict(color=color, width=1.5),
                 marker=dict(size=4, color=color),
                 opacity=path_opacity, hoverinfo="skip",
@@ -436,7 +452,7 @@ else:
                 mode="markers",
                 marker=dict(color=color, size=12, symbol="circle",
                             line=dict(color="white", width=2)),
-                hovertext=f"Human: {player_id[:12]} | {format_time(int(player_df['ts_ms'].iloc[-1]))}",
+                hovertext=f"Human: {pid[:12]} | {format_time(int(player_df['ts_ms'].iloc[-1]))}",
                 hoverinfo="text", showlegend=False,
             ))
 
@@ -450,7 +466,6 @@ else:
                 opacity=0.3, hoverinfo="skip", showlegend=False,
             ))
 
-    # Event markers
     marker_map = {}
     if show_kills:
         marker_map["Kill"]      = EVENT_STYLES["Kill"]
@@ -490,6 +505,14 @@ else:
 
     st.plotly_chart(fig, use_container_width=True)
 
+    with st.expander("Raw event data"):
+        st.dataframe(
+            visible_df[["user_id","human","event","x","z","ts_ms"]]
+            .sort_values("ts_ms").reset_index(drop=True),
+            use_container_width=True,
+        )
+
+    # ── PLAYBACK LOOP ─────────────────────────
     if st.session_state.playing:
         next_cursor = st.session_state.cursor + 3000
         if next_cursor >= match_duration:
@@ -499,10 +522,3 @@ else:
             st.session_state.cursor = next_cursor
         time.sleep(0.1)
         st.rerun()
-
-    with st.expander("Raw event data"):
-        st.dataframe(
-            visible_df[["user_id","human","event","x","z","ts_ms"]]
-            .sort_values("ts_ms").reset_index(drop=True),
-            use_container_width=True,
-        )
