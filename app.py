@@ -105,6 +105,139 @@ def make_base_fig(selected_map):
     ))
     return fig
 
+def generate_match_summary(match_df, match_info, match_duration, selected_map):
+    """Generate an automated narrative match summary."""
+
+    num_humans   = int(match_info["players"]) if match_info is not None else match_df[match_df["human"]==True]["user_id"].nunique()
+    num_bots     = int(match_info["bots"])    if match_info is not None else match_df[match_df["human"]==False]["user_id"].nunique()
+    total        = num_humans + num_bots
+
+    kills        = len(match_df[match_df["event"] == "Kill"])
+    bot_kills    = len(match_df[match_df["event"] == "BotKill"])
+    deaths       = len(match_df[match_df["event"] == "Killed"])
+    bot_deaths   = len(match_df[match_df["event"] == "BotKilled"])
+    storm_deaths = len(match_df[match_df["event"] == "KilledByStorm"])
+    loot_events  = len(match_df[match_df["event"] == "Loot"])
+    total_kills  = kills + bot_kills
+    total_deaths = deaths + bot_deaths + storm_deaths
+
+    duration_str = format_time(match_duration)
+
+    # Per player stats
+    player_kills = {}
+    player_deaths = {}
+    player_loot = {}
+    for pid in match_df[match_df["human"]==True]["user_id"].unique():
+        pdf = match_df[match_df["user_id"] == pid]
+        player_kills[pid]  = len(pdf[pdf["event"].isin(["Kill","BotKill"])])
+        player_deaths[pid] = len(pdf[pdf["event"].isin(["Killed","BotKilled","KilledByStorm"])])
+        player_loot[pid]   = len(pdf[pdf["event"] == "Loot"])
+
+    top_killer     = max(player_kills,  key=player_kills.get)  if player_kills  else None
+    top_looter     = max(player_loot,   key=player_loot.get)   if player_loot   else None
+    most_deaths    = max(player_deaths, key=player_deaths.get) if player_deaths else None
+
+    # Storm pressure
+    storm_pct = round(storm_deaths / max(total_deaths, 1) * 100)
+
+    # Bot ratio
+    bot_ratio = round(num_bots / max(total, 1) * 100)
+
+    # Loot per player
+    loot_per_player = round(loot_events / max(num_humans, 1), 1)
+
+    # Combat intensity
+    kills_per_min = round(total_kills / max(match_duration / 60000, 1), 1)
+    if kills_per_min > 3:
+        intensity = "🔴 Very High"
+    elif kills_per_min > 1.5:
+        intensity = "🟠 High"
+    elif kills_per_min > 0.5:
+        intensity = "🟡 Medium"
+    else:
+        intensity = "🟢 Low"
+
+    # Build summary cards
+    st.markdown("## 📋 Match Summary")
+
+    # Top row — key numbers
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    c1.metric("👤 Human Players", num_humans)
+    c2.metric("🤖 Bots",          num_bots)
+    c3.metric("⏱ Duration",       duration_str)
+    c4.metric("⚔️ Total Kills",    total_kills)
+    c5.metric("🌪 Storm Deaths",   storm_deaths)
+    c6.metric("📦 Loot Events",    loot_events)
+
+    st.markdown("")
+
+    # Narrative summary
+    st.markdown(f"""
+<div style='background:#111; border:1px solid #333; border-radius:10px; padding:20px; margin-bottom:16px'>
+<h4 style='color:#00FFFF; margin-top:0'>📖 Match Narrative</h4>
+<p style='color:#ccc; line-height:1.8'>
+This match on <b style='color:white'>{selected_map}</b> lasted <b style='color:white'>{duration_str}</b>
+and featured <b style='color:white'>{num_humans} human player{"s" if num_humans != 1 else ""}</b> alongside
+<b style='color:white'>{num_bots} bot{"s" if num_bots != 1 else ""}</b>
+({bot_ratio}% of all participants were AI-controlled).
+</p>
+<p style='color:#ccc; line-height:1.8'>
+A total of <b style='color:white'>{total_kills} kills</b> were recorded —
+<b style='color:lime'>{kills} player-vs-player</b> and
+<b style='color:orange'>{bot_kills} bot eliminations</b>.
+Combat intensity was rated <b style='color:white'>{intensity}</b>
+({kills_per_min} kills/min).
+</p>
+<p style='color:#ccc; line-height:1.8'>
+The storm claimed <b style='color:#AA00FF'>{storm_deaths} player{"s" if storm_deaths != 1 else ""}</b>
+({storm_pct}% of all deaths), suggesting
+{"significant storm pressure — players may be struggling to rotate in time." if storm_pct > 30 else "manageable storm pressure this match."}.
+</p>
+<p style='color:#ccc; line-height:1.8'>
+Players picked up loot <b style='color:yellow'>{loot_events} times</b>
+({loot_per_player} pickups per human player on average).
+{"Loot activity was high — the map's item distribution seems to be working well." if loot_per_player > 5 else "Loot activity was low — some areas may need better rewards."}
+</p>
+</div>
+""", unsafe_allow_html=True)
+
+    # Player breakdown
+    if player_kills:
+        st.markdown("#### 🏆 Player Breakdown")
+        cols = st.columns(len(player_kills))
+        for i, (pid, k) in enumerate(player_kills.items()):
+            d = player_deaths.get(pid, 0)
+            l = player_loot.get(pid, 0)
+            is_top = pid == top_killer
+            border = "border:1px solid #00FFFF;" if is_top else "border:1px solid #333;"
+            label  = "👑 Top Fragger" if is_top else f"Player {i+1}"
+            cols[i].markdown(f"""
+<div style='background:#111; {border} border-radius:8px; padding:12px; text-align:center'>
+<div style='color:#888; font-size:11px'>{label}</div>
+<div style='color:#00FFFF; font-size:11px; margin-bottom:8px'>{pid[:12]}...</div>
+<div style='color:lime; font-size:20px; font-weight:bold'>{k}</div>
+<div style='color:#888; font-size:11px'>kills</div>
+<div style='color:red; font-size:16px; margin-top:4px'>{d}</div>
+<div style='color:#888; font-size:11px'>deaths</div>
+<div style='color:yellow; font-size:16px; margin-top:4px'>{l}</div>
+<div style='color:#888; font-size:11px'>loot</div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # Design insights
+    st.markdown("#### 💡 Design Insights")
+    i1, i2, i3 = st.columns(3)
+
+    combat_note = "High combat intensity — consider if this is the intended pacing." if kills_per_min > 2 else "Combat pacing looks balanced for an extraction shooter."
+    storm_note  = "Storm deaths are high — players may be getting trapped. Review storm speed." if storm_pct > 30 else "Storm mechanics appear balanced this match."
+    loot_note   = "Low loot activity — check if item spawn rates need adjustment." if loot_per_player < 3 else "Loot distribution seems healthy this match."
+
+    i1.info(f"⚔️ **Combat**\n\n{combat_note}")
+    i2.info(f"🌪️ **Storm**\n\n{storm_note}")
+    i3.info(f"📦 **Loot**\n\n{loot_note}")
+
 @st.cache_data
 def load_json_data():
     with open(os.path.join(OUTPUT_DIR, "events.json")) as f:
@@ -128,16 +261,10 @@ def get_match_detail(match_id, events_df):
     match_df["ts_ms"] = (match_df["ts"] - match_start).astype(int)
     return match_df
 
-# ─────────────────────────────────────────────
-# SESSION STATE
-# ─────────────────────────────────────────────
 if "playing"    not in st.session_state: st.session_state.playing    = False
 if "cursor"     not in st.session_state: st.session_state.cursor     = 999_999_999
 if "last_match" not in st.session_state: st.session_state.last_match = None
 
-# ─────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────
 st.markdown("""
     <h1 style='color:#00FFFF; font-family:monospace; margin-bottom:0'>
     LILA BLACK — Level Design Analytics
@@ -146,17 +273,10 @@ st.markdown("""
     <hr style='border-color:#333'>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# LOAD DATA
-# ─────────────────────────────────────────────
 with st.spinner("Loading data..."):
     events_df, heatmap_df, matches_df = load_json_data()
 
-# ─────────────────────────────────────────────
-# SIDEBAR — top level filters
-# ─────────────────────────────────────────────
 st.sidebar.markdown("## Filters")
-
 available_maps = sorted(events_df["map"].unique())
 selected_map   = st.sidebar.selectbox("Select Map", available_maps)
 
@@ -324,7 +444,7 @@ else:
 
     st.session_state.cursor = min(st.session_state.cursor, match_duration)
 
-    # ── SIDEBAR LAYERS ────────────────────────
+    # Sidebar layers
     st.sidebar.markdown("---")
     st.sidebar.subheader("Layers")
     show_human_paths = st.sidebar.checkbox("Human Movement Paths", value=True)
@@ -339,7 +459,7 @@ else:
     )
     path_opacity = st.sidebar.slider("Path Opacity", 0.1, 1.0, 0.6, 0.05)
 
-    # ── SIDEBAR TIMELINE ──────────────────────
+    # Sidebar timeline
     st.sidebar.markdown("---")
     st.sidebar.subheader("⏱️ Timeline Playback")
     st.sidebar.caption("Showing full match by default — Reset then Play to watch!")
@@ -369,29 +489,18 @@ else:
     ts_cursor = st.session_state.cursor
     st.sidebar.caption(f"⏱ {format_time(ts_cursor)} / {format_time(match_duration)}")
 
-    # ── MAIN AREA ─────────────────────────────
-    st.markdown("## Match Overview")
-    match_info = map_matches[map_matches["match_id"] == selected_match]
-    if not match_info.empty:
-        match_info = match_info.iloc[0]
-        num_humans = int(match_info["players"])
-        num_bots   = int(match_info["bots"])
-    else:
-        num_humans = match_df[match_df["human"]==True]["user_id"].nunique()
-        num_bots   = match_df[match_df["human"]==False]["user_id"].nunique()
+    # ── MATCH SUMMARY ─────────────────────────
+    match_info_row = map_matches[map_matches["match_id"] == selected_match]
+    match_info = match_info_row.iloc[0] if not match_info_row.empty else None
+    generate_match_summary(match_df, match_info, match_duration, selected_map)
 
-    c1,c2,c3,c4,c5,c6 = st.columns(6)
-    c1.metric("Human Players", num_humans)
-    c2.metric("Bots",          num_bots)
-    c3.metric("Duration",      format_time(match_duration))
-    c4.metric("Total Kills",   len(match_df[match_df["event"].isin(["Kill","BotKill"])]))
-    c5.metric("Storm Deaths",  len(match_df[match_df["event"] == "KilledByStorm"]))
-    c6.metric("Loot Events",   len(match_df[match_df["event"] == "Loot"]))
+    st.markdown("---")
 
     # Live stats
     visible_df = match_df[match_df["ts_ms"] <= ts_cursor].copy()
     visible_df = add_px_py(visible_df, selected_map)
 
+    st.markdown("#### 🔴 Live — Events at Current Timestamp")
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("Events Shown", len(visible_df))
     c2.metric("Kills So Far", len(visible_df[visible_df["event"].isin(["Kill","BotKill"])]))
@@ -512,7 +621,6 @@ else:
             use_container_width=True,
         )
 
-    # ── PLAYBACK LOOP ─────────────────────────
     if st.session_state.playing:
         next_cursor = st.session_state.cursor + 3000
         if next_cursor >= match_duration:
